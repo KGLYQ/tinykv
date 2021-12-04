@@ -171,7 +171,7 @@ func newRaft(c *Config) *Raft {
 	// Your Code Here (2A).
 	raft := Raft{}
 	raft.config = c
-	raft.Term = 1
+	raft.Term = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.electionElapsed = c.ElectionTick
 	raft.heartbeatTimeout = c.HeartbeatTick
@@ -203,7 +203,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 	pre := prs.Next - 1
 	preLog := r.RaftLog.entries[pre]
 	msg := pb.Message{
-		MsgType:  pb.MessageType_MsgBeat,
+		MsgType:  pb.MessageType_MsgHeartbeat,
 		To:       to,
 		From:     r.id,
 		Term:     r.Term,
@@ -220,28 +220,62 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
+	r.heartbeatElapsed--
+	r.electionElapsed--
+	if r.heartbeatElapsed <= 0 {
+		r.becomeCandidate()
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgBeat,
+		})
+		r.heartbeatElapsed = r.heartbeatTimeout
+		return
+	}
+	if r.electionElapsed <= 0 {
+		r.becomeCandidate()
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgHup,
+		})
+		r.electionElapsed = r.electionTimeout
+	}
 }
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+	r.Term = term
+	r.Lead = lead
+	r.State = StateFollower
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+	r.State = StateCandidate
 }
 
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
+	r.Lead = r.id
+	r.State = StateLeader
 }
 
 // Step the entrance of handle message, see `MessageType`
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
+	switch m.MsgType {
+	case pb.MessageType_MsgHeartbeat:
+		r.handleHeartbeat(m)
+	case pb.MessageType_MsgBeat:
+		for _, peerId := range r.config.peers {
+			if peerId == r.id {
+				continue
+			}
+			r.sendHeartbeat(peerId)
+		}
+	}
 	switch r.State {
 	case StateFollower:
 	case StateCandidate:
@@ -258,6 +292,14 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
+	if m.Term < r.Term {
+		return
+	}
+	if m.Term > r.Term {
+		r.becomeFollower(r.Term, m.From)
+		return
+	}
+	//term相等的场景下先不处理
 }
 
 // handleSnapshot handle Snapshot RPC request
