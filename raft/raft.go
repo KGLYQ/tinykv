@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -157,6 +156,11 @@ type Raft struct {
 	// value.
 	// (Used in 3A conf change)
 	PendingConfIndex uint64
+
+	//自定义属性
+	config *Config
+
+	commitIndex uint64
 }
 
 // newRaft return a raft peer with the given config
@@ -165,7 +169,24 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
-	return nil
+	raft := Raft{}
+	raft.config = c
+	raft.Term = 1
+	raft.electionTimeout = c.ElectionTick
+	raft.electionElapsed = c.ElectionTick
+	raft.heartbeatTimeout = c.HeartbeatTick
+	raft.heartbeatElapsed = c.HeartbeatTick
+	raft.id = c.ID
+	raft.Lead = 0
+	raft.leadTransferee = 0
+	raft.msgs = make([]pb.Message, 0)
+	raft.PendingConfIndex = 0
+	raft.Prs = make(map[uint64]*Progress)
+	//raft.RaftLog=newLog()
+	raft.State = StateFollower
+	raft.Vote = 0
+	raft.votes = make(map[uint64]bool)
+	return &raft
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
@@ -178,6 +199,22 @@ func (r *Raft) sendAppend(to uint64) bool {
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
+	prs := r.Prs[to]
+	pre := prs.Next - 1
+	preLog := r.RaftLog.entries[pre]
+	msg := pb.Message{
+		MsgType:  pb.MessageType_MsgBeat,
+		To:       to,
+		From:     r.id,
+		Term:     r.Term,
+		LogTerm:  preLog.Term,
+		Index:    preLog.Index,
+		Entries:  r.RaftLog.StartWith(prs.Next),
+		Commit:   r.commitIndex,
+		Snapshot: nil,
+		Reject:   false,
+	}
+	r.msgs = append(r.msgs, msg)
 }
 
 // tick advances the internal logical clock by a single tick.

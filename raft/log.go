@@ -89,3 +89,11 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
 	return 0, nil
 }
+
+func (l *RaftLog) StartWith(start uint64) []*pb.Entry {
+	arr := make([]*pb.Entry, 0)
+	for _, log := range l.entries[start:] {
+		arr = append(arr, &log)
+	}
+	return arr
+}
