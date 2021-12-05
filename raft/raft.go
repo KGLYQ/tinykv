@@ -20,7 +20,7 @@ import (
 	"log"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -224,6 +224,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 		Snapshot: nil,
 		Reject:   false,
 	}
+	DPrintf("send heartbeat...from:%d,to:%d,msg:%+v", msg.From, msg.To, msg)
 	r.msgs = append(r.msgs, msg)
 }
 
@@ -245,7 +246,6 @@ func (r *Raft) tick() {
 	r.heartbeatElapsed--
 	r.electionElapsed--
 	if r.heartbeatElapsed <= 0 {
-		r.becomeCandidate()
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgBeat,
 		})
@@ -279,8 +279,8 @@ func (r *Raft) becomeCandidate() {
 	r.electionElapsed = r.electionTimeout
 	r.Term++
 	//直接投自己一票
-	r.Vote = r.id
-	r.votes[r.id] = true
+	/*r.Vote = r.id
+	r.votes[r.id] = true*/
 }
 
 // becomeLeader transform this peer's state to leader
@@ -295,33 +295,46 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-	switch m.MsgType {
-	case pb.MessageType_MsgHeartbeat:
-		r.handleHeartbeat(m)
-	case pb.MessageType_MsgBeat:
-		for _, peerId := range r.config.peers {
-			if peerId == r.id {
-				continue
-			}
-			r.sendHeartbeat(peerId)
-		}
-	case pb.MessageType_MsgHup:
-		r.becomeCandidate()
-		for _, peerId := range r.config.peers {
-			if r.id == peerId {
-				continue
-			}
-			r.sendRequestVote(peerId)
-		}
-	case pb.MessageType_MsgRequestVote:
-		r.handleRequestVote(m)
-	case pb.MessageType_MsgRequestVoteResponse:
-		r.handleRequestVoteResp(m)
-	}
 	switch r.State {
 	case StateFollower:
+		switch m.MsgType {
+		case pb.MessageType_MsgHeartbeat:
+			r.handleHeartbeat(m)
+		case pb.MessageType_MsgRequestVote:
+			r.handleRequestVote(m)
+		case pb.MessageType_MsgRequestVoteResponse:
+			r.handleRequestVoteResp(m)
+		}
 	case StateCandidate:
+		switch m.MsgType {
+		case pb.MessageType_MsgHeartbeat:
+			r.handleHeartbeat(m)
+		case pb.MessageType_MsgHup:
+			for _, peerId := range r.config.peers {
+				/*if r.id == peerId {
+					continue
+				}*/
+				r.sendRequestVote(peerId)
+			}
+		case pb.MessageType_MsgRequestVote:
+			r.handleRequestVote(m)
+		case pb.MessageType_MsgRequestVoteResponse:
+			r.handleRequestVoteResp(m)
+		}
 	case StateLeader:
+		switch m.MsgType {
+		case pb.MessageType_MsgHeartbeat:
+			r.handleHeartbeat(m)
+		case pb.MessageType_MsgBeat:
+			for _, peerId := range r.config.peers {
+				if peerId == r.id {
+					continue
+				}
+				r.sendHeartbeat(peerId)
+			}
+		case pb.MessageType_MsgRequestVoteResponse:
+			r.handleRequestVoteResp(m)
+		}
 	}
 	return nil
 }
