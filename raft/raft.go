@@ -17,7 +17,17 @@ package raft
 import (
 	"errors"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"log"
 )
+
+const Debug = true
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+	return
+}
 
 // None is a placeholder node ID used when there is no leader.
 const None uint64 = 0
@@ -217,6 +227,18 @@ func (r *Raft) sendHeartbeat(to uint64) {
 	r.msgs = append(r.msgs, msg)
 }
 
+func (r *Raft) sendRequestVote(to uint64) {
+	// Your Code Here (2A).
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgRequestVote,
+		To:      to,
+		From:    r.id,
+		Term:    r.Term,
+	}
+	DPrintf("send request vote...from:%d,to:%d,term:%d", msg.From, msg.To, msg.Term)
+	r.msgs = append(r.msgs, msg)
+}
+
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
@@ -235,7 +257,6 @@ func (r *Raft) tick() {
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgHup,
 		})
-		r.electionElapsed = r.electionTimeout
 	}
 }
 
@@ -245,12 +266,21 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Term = term
 	r.Lead = lead
 	r.State = StateFollower
+	r.Vote = 0
+	r.votes = make(map[uint64]bool)
+	r.heartbeatElapsed = r.heartbeatTimeout
+	r.electionElapsed = r.electionTimeout
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 	r.State = StateCandidate
+	r.electionElapsed = r.electionTimeout
+	r.Term++
+	//直接投自己一票
+	r.Vote = r.id
+	r.votes[r.id] = true
 }
 
 // becomeLeader transform this peer's state to leader
@@ -275,6 +305,18 @@ func (r *Raft) Step(m pb.Message) error {
 			}
 			r.sendHeartbeat(peerId)
 		}
+	case pb.MessageType_MsgHup:
+		r.becomeCandidate()
+		for _, peerId := range r.config.peers {
+			if r.id == peerId {
+				continue
+			}
+			r.sendRequestVote(peerId)
+		}
+	case pb.MessageType_MsgRequestVote:
+		r.handleRequestVote(m)
+	case pb.MessageType_MsgRequestVoteResponse:
+		r.handleRequestVoteResp(m)
 	}
 	switch r.State {
 	case StateFollower:
@@ -300,6 +342,47 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		return
 	}
 	//term相等的场景下先不处理
+}
+
+func (r *Raft) handleRequestVote(m pb.Message) {
+	// Your Code Here (2A).
+	resp := pb.Message{
+		MsgType: pb.MessageType_MsgRequestVoteResponse,
+		To:      m.From,
+		From:    r.id,
+		Term:    r.Term,
+		Reject:  true,
+	}
+	defer func() {
+		r.msgs = append(r.msgs, resp)
+	}()
+	if r.Term > m.Term {
+		return
+	}
+	r.becomeFollower(m.Term, m.From)
+	r.Vote = m.From
+	resp.Term = r.Term
+	resp.Reject = false
+}
+
+func (r *Raft) handleRequestVoteResp(m pb.Message) {
+	DPrintf("handle request vote resp...from:%d,to:%d,term:%d,reject:%t", m.From, m.To, m.Term, m.Reject)
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, m.From)
+		return
+	}
+	r.votes[m.From] = !m.Reject
+	if !m.Reject {
+		cnt := 0
+		for _, v := range r.votes {
+			if v {
+				cnt++
+			}
+		}
+		if cnt > len(r.config.peers)/2 {
+			r.becomeLeader()
+		}
+	}
 }
 
 // handleSnapshot handle Snapshot RPC request
