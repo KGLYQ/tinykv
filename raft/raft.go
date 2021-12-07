@@ -20,7 +20,7 @@ import (
 	"log"
 )
 
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -209,20 +209,18 @@ func (r *Raft) sendAppend(to uint64) bool {
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
-	prs := r.Prs[to]
-	pre := prs.Next - 1
-	preLog := r.RaftLog.entries[pre]
+	//prs := r.Prs[to]
+	//pre := prs.Next - 1
+	//preLog := r.RaftLog.entries[pre]
 	msg := pb.Message{
-		MsgType:  pb.MessageType_MsgHeartbeat,
-		To:       to,
-		From:     r.id,
-		Term:     r.Term,
-		LogTerm:  preLog.Term,
-		Index:    preLog.Index,
-		Entries:  r.RaftLog.StartWith(prs.Next),
-		Commit:   r.commitIndex,
-		Snapshot: nil,
-		Reject:   false,
+		MsgType: pb.MessageType_MsgHeartbeat,
+		To:      to,
+		From:    r.id,
+		Term:    r.Term,
+		//LogTerm:  preLog.Term,
+		//Index:    preLog.Index,
+		//Entries:  r.RaftLog.StartWith(prs.Next),
+		//Commit:   r.commitIndex,
 	}
 	DPrintf("send heartbeat...from:%d,to:%d,msg:%+v", msg.From, msg.To, msg)
 	r.msgs = append(r.msgs, msg)
@@ -253,16 +251,21 @@ func (r *Raft) tick() {
 		return
 	}
 	if r.electionElapsed <= 0 {
-		r.becomeCandidate()
-		r.msgs = append(r.msgs, pb.Message{
-			MsgType: pb.MessageType_MsgHup,
-		})
+		r.handleElectionTimeout()
+	}
+}
+
+func (r *Raft) handleElectionTimeout() {
+	r.becomeCandidate()
+	for _, peerId := range r.config.peers {
+		r.sendRequestVote(peerId)
 	}
 }
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+	DPrintf("role change...peerId:%d,role:Follower", r.id)
 	r.Term = term
 	r.Lead = lead
 	r.State = StateFollower
@@ -275,6 +278,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+	DPrintf("role change...peerId:%d,role:Candidate", r.id)
 	r.State = StateCandidate
 	r.electionElapsed = r.electionTimeout
 	r.Term++
@@ -287,6 +291,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
+	DPrintf("role change...peerId:%d,role:Leader", r.id)
 	r.Lead = r.id
 	r.State = StateLeader
 }
@@ -300,6 +305,10 @@ func (r *Raft) Step(m pb.Message) error {
 		switch m.MsgType {
 		case pb.MessageType_MsgHeartbeat:
 			r.handleHeartbeat(m)
+		case pb.MessageType_MsgHeartbeatResponse:
+			r.handleHeartbeatResp(m)
+		case pb.MessageType_MsgHup:
+			r.handleElectionTimeout()
 		case pb.MessageType_MsgRequestVote:
 			r.handleRequestVote(m)
 		case pb.MessageType_MsgRequestVoteResponse:
@@ -309,13 +318,10 @@ func (r *Raft) Step(m pb.Message) error {
 		switch m.MsgType {
 		case pb.MessageType_MsgHeartbeat:
 			r.handleHeartbeat(m)
+		case pb.MessageType_MsgHeartbeatResponse:
+			r.handleHeartbeatResp(m)
 		case pb.MessageType_MsgHup:
-			for _, peerId := range r.config.peers {
-				/*if r.id == peerId {
-					continue
-				}*/
-				r.sendRequestVote(peerId)
-			}
+			r.handleElectionTimeout()
 		case pb.MessageType_MsgRequestVote:
 			r.handleRequestVote(m)
 		case pb.MessageType_MsgRequestVoteResponse:
@@ -325,6 +331,8 @@ func (r *Raft) Step(m pb.Message) error {
 		switch m.MsgType {
 		case pb.MessageType_MsgHeartbeat:
 			r.handleHeartbeat(m)
+		case pb.MessageType_MsgHeartbeatResponse:
+			r.handleHeartbeatResp(m)
 		case pb.MessageType_MsgBeat:
 			for _, peerId := range r.config.peers {
 				if peerId == r.id {
@@ -347,6 +355,15 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
+	resp := pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeatResponse,
+		To:      m.From,
+		From:    r.id,
+		Term:    r.Term,
+	}
+	defer func() {
+		r.msgs = append(r.msgs, resp)
+	}()
 	if m.Term < r.Term {
 		return
 	}
@@ -355,6 +372,12 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		return
 	}
 	//term相等的场景下先不处理
+}
+
+func (r *Raft) handleHeartbeatResp(m pb.Message) {
+	if m.Term > r.Term {
+		r.becomeFollower(r.Term, m.From)
+	}
 }
 
 func (r *Raft) handleRequestVote(m pb.Message) {
@@ -369,7 +392,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 	defer func() {
 		r.msgs = append(r.msgs, resp)
 	}()
-	if r.Term > m.Term {
+	if r.Term >= m.Term {
 		return
 	}
 	r.becomeFollower(m.Term, m.From)
@@ -379,7 +402,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 }
 
 func (r *Raft) handleRequestVoteResp(m pb.Message) {
-	DPrintf("handle request vote resp...from:%d,to:%d,term:%d,reject:%t", m.From, m.To, m.Term, m.Reject)
+	DPrintf("handle request vote resp...msg:%+v,term:%d", m, r.Term)
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, m.From)
 		return
