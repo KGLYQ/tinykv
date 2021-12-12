@@ -223,7 +223,23 @@ func (r *Raft) resetRandomElectionTimeout() {
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
-	return false
+	progress := r.Prs[to]
+	preLogIdx := progress.Next - 1
+	preLogTerm, _ := r.RaftLog.Term(preLogIdx)
+	message := pb.Message{
+		MsgType: pb.MessageType_MsgAppend,
+		To:      to,
+		From:    r.id,
+		Term:    r.Term,
+		//下面这两个其实应该命名为PreLogTerm和PreLogIndex
+		LogTerm:  preLogTerm,
+		Index:    preLogIdx,
+		Entries:  r.RaftLog.slice(progress.Next),
+		Commit:   r.commitIndex,
+		Snapshot: nil,
+	}
+	r.msgs = append(r.msgs, message)
+	return true
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
@@ -382,6 +398,41 @@ func (r *Raft) stepFollower(m pb.Message) error {
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
+	if m.Index < r.RaftLog.committed {
+		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
+		return
+	}
+
+	if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
+		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
+	} else {
+		r.logger.Debugf("%x [logterm: %d, index: %d] rejected MsgApp [logterm: %d, index: %d] from %x",
+			r.id, r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(m.Index)), m.Index, m.LogTerm, m.Index, m.From)
+
+		// Return a hint to the leader about the maximum index and term that the
+		// two logs could be divergent at. Do this by searching through the
+		// follower's log for the maximum (index, term) pair with a term <= the
+		// MsgApp's LogTerm and an index <= the MsgApp's Index. This can help
+		// skip all indexes in the follower's uncommitted tail with terms
+		// greater than the MsgApp's LogTerm.
+		//
+		// See the other caller for findConflictByTerm (in stepLeader) for a much
+		// more detailed explanation of this mechanism.
+		hintIndex := min(m.Index, r.raftLog.lastIndex())
+		hintIndex = r.raftLog.findConflictByTerm(hintIndex, m.LogTerm)
+		hintTerm, err := r.raftLog.term(hintIndex)
+		if err != nil {
+			panic(fmt.Sprintf("term(%d) must be valid, but got %v", hintIndex, err))
+		}
+		r.send(pb.Message{
+			To:         m.From,
+			Type:       pb.MsgAppResp,
+			Index:      m.Index,
+			Reject:     true,
+			RejectHint: hintIndex,
+			LogTerm:    hintTerm,
+		})
+	}
 }
 
 // handleHeartbeat handle Heartbeat RPC request
@@ -466,4 +517,8 @@ func (r *Raft) addNode(id uint64) {
 // removeNode remove a node from raft group
 func (r *Raft) removeNode(id uint64) {
 	// Your Code Here (3A).
+}
+
+func (r *Raft) send(m pb.Message) {
+	r.msgs = append(r.msgs, m)
 }

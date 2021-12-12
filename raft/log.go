@@ -81,16 +81,21 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	return 0
+	//TODO:暂时不考虑snapshot
+	return uint64(len(l.entries) - 1)
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	return 0, nil
+	entry := l.entries[i]
+	return entry.Term, nil
 }
 
-func (l *RaftLog) StartWith(start uint64) []*pb.Entry {
+func (l *RaftLog) slice(start uint64) []*pb.Entry {
+	if start > l.LastIndex() {
+		panic("idx err...")
+	}
 	arr := make([]*pb.Entry, 0)
 	for _, log := range l.entries[start:] {
 		arr = append(arr, &log)
