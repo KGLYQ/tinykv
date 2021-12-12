@@ -18,6 +18,7 @@ import (
 	"errors"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"log"
+	"math/rand"
 )
 
 const Debug = true
@@ -168,9 +169,11 @@ type Raft struct {
 	PendingConfIndex uint64
 
 	//自定义属性
-	config *Config
+	//config *Config
 
 	commitIndex uint64
+	//随机选举超时，为了避免live lock的问题
+	randomElectionTimeout int
 }
 
 // newRaft return a raft peer with the given config
@@ -179,24 +182,41 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
-	raft := Raft{}
-	raft.config = c
-	raft.Term = 0
-	raft.electionTimeout = c.ElectionTick
-	raft.electionElapsed = c.ElectionTick
-	raft.heartbeatTimeout = c.HeartbeatTick
-	raft.heartbeatElapsed = c.HeartbeatTick
-	raft.id = c.ID
-	raft.Lead = 0
-	raft.leadTransferee = 0
-	raft.msgs = make([]pb.Message, 0)
-	raft.PendingConfIndex = 0
-	raft.Prs = make(map[uint64]*Progress)
-	//raft.RaftLog=newLog()
-	raft.State = StateFollower
-	raft.Vote = 0
-	raft.votes = make(map[uint64]bool)
+	raftlog := newLog(c.Storage)
+	//这里相当于论文定义的next index和match index
+	//TODO:这里需要读持久化的数据
+	prs := make(map[uint64]*Progress)
+	for _, peerId := range c.peers {
+		if peerId != c.ID {
+			prs[peerId] = &Progress{0, 1}
+		}
+	}
+	raft := Raft{
+		id: c.ID,
+		//TODO:读持久化存储
+		Term:             0,
+		Vote:             0,
+		RaftLog:          raftlog,
+		Prs:              prs,
+		State:            StateFollower,
+		votes:            make(map[uint64]bool),
+		msgs:             make([]pb.Message, 0),
+		Lead:             0,
+		heartbeatTimeout: c.HeartbeatTick,
+		electionTimeout:  c.ElectionTick,
+		heartbeatElapsed: 0,
+		electionElapsed:  0,
+		leadTransferee:   0,
+		PendingConfIndex: 0,
+		commitIndex:      0,
+	}
+	raft.resetRandomElectionTimeout()
 	return &raft
+}
+
+//更新随机超时时间
+func (r *Raft) resetRandomElectionTimeout() {
+	r.randomElectionTimeout = r.electionTimeout + rand.Intn(r.electionTimeout)
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
@@ -257,7 +277,7 @@ func (r *Raft) tick() {
 
 func (r *Raft) handleElectionTimeout() {
 	r.becomeCandidate()
-	for _, peerId := range r.config.peers {
+	for peerId := range r.Prs {
 		r.sendRequestVote(peerId)
 	}
 }
@@ -283,8 +303,8 @@ func (r *Raft) becomeCandidate() {
 	r.electionElapsed = r.electionTimeout
 	r.Term++
 	//直接投自己一票
-	/*r.Vote = r.id
-	r.votes[r.id] = true*/
+	r.Vote = r.id
+	r.votes[r.id] = true
 }
 
 // becomeLeader transform this peer's state to leader
@@ -350,10 +370,7 @@ func (r *Raft) stepFollower(m pb.Message) error {
 	case pb.MessageType_MsgHeartbeatResponse:
 		r.handleHeartbeatResp(m)
 	case pb.MessageType_MsgBeat:
-		for _, peerId := range r.config.peers {
-			if peerId == r.id {
-				continue
-			}
+		for peerId := range r.Prs {
 			r.sendHeartbeat(peerId)
 		}
 	case pb.MessageType_MsgRequestVoteResponse:
@@ -430,7 +447,7 @@ func (r *Raft) handleRequestVoteResp(m pb.Message) {
 				cnt++
 			}
 		}
-		if cnt > len(r.config.peers)/2 {
+		if cnt > (len(r.Prs)+1)/2 {
 			r.becomeLeader()
 		}
 	}
