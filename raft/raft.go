@@ -302,47 +302,62 @@ func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
-		switch m.MsgType {
-		case pb.MessageType_MsgHeartbeat:
-			r.handleHeartbeat(m)
-		case pb.MessageType_MsgHeartbeatResponse:
-			r.handleHeartbeatResp(m)
-		case pb.MessageType_MsgHup:
-			r.handleElectionTimeout()
-		case pb.MessageType_MsgRequestVote:
-			r.handleRequestVote(m)
-		case pb.MessageType_MsgRequestVoteResponse:
-			r.handleRequestVoteResp(m)
-		}
+		r.stepFollower(m)
 	case StateCandidate:
-		switch m.MsgType {
-		case pb.MessageType_MsgHeartbeat:
-			r.handleHeartbeat(m)
-		case pb.MessageType_MsgHeartbeatResponse:
-			r.handleHeartbeatResp(m)
-		case pb.MessageType_MsgHup:
-			r.handleElectionTimeout()
-		case pb.MessageType_MsgRequestVote:
-			r.handleRequestVote(m)
-		case pb.MessageType_MsgRequestVoteResponse:
-			r.handleRequestVoteResp(m)
-		}
+		r.stepCandidate(m)
 	case StateLeader:
-		switch m.MsgType {
-		case pb.MessageType_MsgHeartbeat:
-			r.handleHeartbeat(m)
-		case pb.MessageType_MsgHeartbeatResponse:
-			r.handleHeartbeatResp(m)
-		case pb.MessageType_MsgBeat:
-			for _, peerId := range r.config.peers {
-				if peerId == r.id {
-					continue
-				}
-				r.sendHeartbeat(peerId)
+		r.stepLeader(m)
+	}
+	return nil
+}
+
+func (r *Raft) stepLeader(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgHeartbeat:
+		r.handleHeartbeat(m)
+	case pb.MessageType_MsgHeartbeatResponse:
+		r.handleHeartbeatResp(m)
+	case pb.MessageType_MsgHup:
+		r.handleElectionTimeout()
+	case pb.MessageType_MsgRequestVote:
+		r.handleRequestVote(m)
+	case pb.MessageType_MsgRequestVoteResponse:
+		r.handleRequestVoteResp(m)
+	}
+	return nil
+}
+
+func (r *Raft) stepCandidate(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgHeartbeat:
+		r.handleHeartbeat(m)
+	case pb.MessageType_MsgHeartbeatResponse:
+		r.handleHeartbeatResp(m)
+	case pb.MessageType_MsgHup:
+		r.handleElectionTimeout()
+	case pb.MessageType_MsgRequestVote:
+		r.handleRequestVote(m)
+	case pb.MessageType_MsgRequestVoteResponse:
+		r.handleRequestVoteResp(m)
+	}
+	return nil
+}
+
+func (r *Raft) stepFollower(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgHeartbeat:
+		r.handleHeartbeat(m)
+	case pb.MessageType_MsgHeartbeatResponse:
+		r.handleHeartbeatResp(m)
+	case pb.MessageType_MsgBeat:
+		for _, peerId := range r.config.peers {
+			if peerId == r.id {
+				continue
 			}
-		case pb.MessageType_MsgRequestVoteResponse:
-			r.handleRequestVoteResp(m)
+			r.sendHeartbeat(peerId)
 		}
+	case pb.MessageType_MsgRequestVoteResponse:
+		r.handleRequestVoteResp(m)
 	}
 	return nil
 }
