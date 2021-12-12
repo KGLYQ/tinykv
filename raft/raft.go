@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"log"
 	"math/rand"
@@ -169,9 +170,6 @@ type Raft struct {
 	PendingConfIndex uint64
 
 	//自定义属性
-	//config *Config
-
-	commitIndex uint64
 	//随机选举超时，为了避免live lock的问题
 	randomElectionTimeout int
 }
@@ -208,7 +206,6 @@ func newRaft(c *Config) *Raft {
 		electionElapsed:  0,
 		leadTransferee:   0,
 		PendingConfIndex: 0,
-		commitIndex:      0,
 	}
 	raft.resetRandomElectionTimeout()
 	return &raft
@@ -235,7 +232,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 		LogTerm:  preLogTerm,
 		Index:    preLogIdx,
 		Entries:  r.RaftLog.slice(progress.Next),
-		Commit:   r.commitIndex,
+		Commit:   r.RaftLog.committed,
 		Snapshot: nil,
 	}
 	r.msgs = append(r.msgs, message)
@@ -398,17 +395,15 @@ func (r *Raft) stepFollower(m pb.Message) error {
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
+	//并发/重试导致commit idx已经更新
 	if m.Index < r.RaftLog.committed {
-		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
+		r.send(pb.Message{To: m.From, MsgType: pb.MessageType_MsgAppendResponse, Index: r.RaftLog.committed})
 		return
 	}
 
-	if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
-		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
+	if mlastIndex, ok := r.RaftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
+		r.send(pb.Message{To: m.From, MsgType: pb.MessageType_MsgAppendResponse, Index: mlastIndex})
 	} else {
-		r.logger.Debugf("%x [logterm: %d, index: %d] rejected MsgApp [logterm: %d, index: %d] from %x",
-			r.id, r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(m.Index)), m.Index, m.LogTerm, m.Index, m.From)
-
 		// Return a hint to the leader about the maximum index and term that the
 		// two logs could be divergent at. Do this by searching through the
 		// follower's log for the maximum (index, term) pair with a term <= the
@@ -418,19 +413,18 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		//
 		// See the other caller for findConflictByTerm (in stepLeader) for a much
 		// more detailed explanation of this mechanism.
-		hintIndex := min(m.Index, r.raftLog.lastIndex())
-		hintIndex = r.raftLog.findConflictByTerm(hintIndex, m.LogTerm)
-		hintTerm, err := r.raftLog.term(hintIndex)
+		hintIndex := min(m.Index, r.RaftLog.LastIndex())
+		hintIndex = r.RaftLog.findConflictByTerm(hintIndex, m.LogTerm)
+		hintTerm, err := r.RaftLog.Term(hintIndex)
 		if err != nil {
 			panic(fmt.Sprintf("term(%d) must be valid, but got %v", hintIndex, err))
 		}
 		r.send(pb.Message{
-			To:         m.From,
-			Type:       pb.MsgAppResp,
-			Index:      m.Index,
-			Reject:     true,
-			RejectHint: hintIndex,
-			LogTerm:    hintTerm,
+			To:      m.From,
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Index:   m.Index,
+			Reject:  true,
+			LogTerm: hintTerm,
 		})
 	}
 }

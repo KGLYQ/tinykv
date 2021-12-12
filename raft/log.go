@@ -102,3 +102,57 @@ func (l *RaftLog) slice(start uint64) []*pb.Entry {
 	}
 	return arr
 }
+
+func (l *RaftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) bool {
+	term, _ := l.Term(index)
+	if term != logTerm {
+		return false
+	}
+
+	if l.matchTerm(index, logTerm) {
+		lastnewi = index + uint64(len(ents))
+		ci := l.findConflict(ents)
+		switch {
+		case ci == 0:
+		case ci <= l.committed:
+			l.logger.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed)
+		default:
+			offset := index + 1
+			l.append(ents[ci-offset:]...)
+		}
+		l.commitTo(min(committed, lastnewi))
+		return lastnewi, true
+	}
+	return 0, false
+}
+
+func (l *RaftLog) index() {
+
+}
+
+func (l *RaftLog) append(ents ...pb.Entry) uint64 {
+	if len(ents) == 0 {
+		return l.LastIndex()
+	}
+	//更新/覆盖本地日志，不能直接删除后面的日志
+	//If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it.
+	//and truncating the log would mean “taking back” entries that we may have already told the leader that we have in our log.
+	idx := ents[0].Index
+	for _, entry := range ents {
+		//覆盖
+		if idx <= l.LastIndex() {
+			if l.index(idx).Term != entry.Term {
+				DPrintf("log conflict,delete log...peerId:%d,delete start:%d", rf.me, idx)
+				rf.logType.trimLast(idx)
+				//rf.log = rf.log[0:idx]
+				//rf.log = append(rf.log, entry)
+				rf.logType.append(entry)
+			}
+		} else {
+			rf.logType.append(entry)
+		}
+		idx++
+	}
+	l.unstable.truncateAndAppend(ents)
+	return l.LastIndex()
+}
