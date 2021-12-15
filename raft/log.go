@@ -103,34 +103,17 @@ func (l *RaftLog) slice(start uint64) []*pb.Entry {
 	return arr
 }
 
-func (l *RaftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) bool {
+func (l *RaftLog) maybeAppend(index, logTerm, committed uint64, ents ...*pb.Entry) bool {
 	term, _ := l.Term(index)
 	if term != logTerm {
 		return false
 	}
-
-	if l.matchTerm(index, logTerm) {
-		lastnewi = index + uint64(len(ents))
-		ci := l.findConflict(ents)
-		switch {
-		case ci == 0:
-		case ci <= l.committed:
-			l.logger.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed)
-		default:
-			offset := index + 1
-			l.append(ents[ci-offset:]...)
-		}
-		l.commitTo(min(committed, lastnewi))
-		return lastnewi, true
-	}
-	return 0, false
+	l.append(ents...)
+	l.committed = committed
+	return true
 }
 
-func (l *RaftLog) index() {
-
-}
-
-func (l *RaftLog) append(ents ...pb.Entry) uint64 {
+func (l *RaftLog) append(ents ...*pb.Entry) uint64 {
 	if len(ents) == 0 {
 		return l.LastIndex()
 	}
@@ -141,18 +124,37 @@ func (l *RaftLog) append(ents ...pb.Entry) uint64 {
 	for _, entry := range ents {
 		//覆盖
 		if idx <= l.LastIndex() {
-			if l.index(idx).Term != entry.Term {
-				DPrintf("log conflict,delete log...peerId:%d,delete start:%d", rf.me, idx)
-				rf.logType.trimLast(idx)
-				//rf.log = rf.log[0:idx]
-				//rf.log = append(rf.log, entry)
-				rf.logType.append(entry)
+			if term, _ := l.Term(idx); term != entry.Term {
+				DPrintf("log conflict,delete log...delete start:%d", idx)
+				l.trimLast(idx)
+				l.entries = append(l.entries, *entry)
 			}
 		} else {
-			rf.logType.append(entry)
+			l.entries = append(l.entries, *entry)
 		}
 		idx++
 	}
-	l.unstable.truncateAndAppend(ents)
 	return l.LastIndex()
+}
+
+func (l *RaftLog) trimLast(idx uint64) {
+	offset := l.entries[0].Index
+	l.entries = l.entries[idx-offset:]
+}
+
+func (l *RaftLog) findConflict(ents []pb.Entry) uint64 {
+	for _, ne := range ents {
+		if !l.matchTerm(ne.Index, ne.Term) {
+			return ne.Index
+		}
+	}
+	return 0
+}
+
+func (l *RaftLog) matchTerm(i, term uint64) bool {
+	t, err := l.Term(i)
+	if err != nil {
+		return false
+	}
+	return t == term
 }

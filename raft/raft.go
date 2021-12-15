@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"log"
 	"math/rand"
@@ -400,31 +399,16 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.send(pb.Message{To: m.From, MsgType: pb.MessageType_MsgAppendResponse, Index: r.RaftLog.committed})
 		return
 	}
-
-	if mlastIndex, ok := r.RaftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
-		r.send(pb.Message{To: m.From, MsgType: pb.MessageType_MsgAppendResponse, Index: mlastIndex})
+	if ok := r.RaftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
+		r.send(pb.Message{To: m.From, MsgType: pb.MessageType_MsgAppendResponse, Index: m.Index})
 	} else {
-		// Return a hint to the leader about the maximum index and term that the
-		// two logs could be divergent at. Do this by searching through the
-		// follower's log for the maximum (index, term) pair with a term <= the
-		// MsgApp's LogTerm and an index <= the MsgApp's Index. This can help
-		// skip all indexes in the follower's uncommitted tail with terms
-		// greater than the MsgApp's LogTerm.
-		//
-		// See the other caller for findConflictByTerm (in stepLeader) for a much
-		// more detailed explanation of this mechanism.
-		hintIndex := min(m.Index, r.RaftLog.LastIndex())
-		hintIndex = r.RaftLog.findConflictByTerm(hintIndex, m.LogTerm)
-		hintTerm, err := r.RaftLog.Term(hintIndex)
-		if err != nil {
-			panic(fmt.Sprintf("term(%d) must be valid, but got %v", hintIndex, err))
-		}
+		//这里还需要有加速冲突解决的逻辑
 		r.send(pb.Message{
 			To:      m.From,
 			MsgType: pb.MessageType_MsgAppendResponse,
 			Index:   m.Index,
 			Reject:  true,
-			LogTerm: hintTerm,
+			//LogTerm: hintTerm,
 		})
 	}
 }
