@@ -21,7 +21,7 @@ import (
 	"math/rand"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -201,7 +201,7 @@ func newRaft(c *Config) *Raft {
 		Lead:             0,
 		heartbeatTimeout: c.HeartbeatTick,
 		electionTimeout:  c.ElectionTick,
-		heartbeatElapsed: 0,
+		heartbeatElapsed: c.HeartbeatTick,
 		electionElapsed:  0,
 		leadTransferee:   0,
 		PendingConfIndex: 0,
@@ -276,8 +276,10 @@ func (r *Raft) tick() {
 	r.heartbeatElapsed--
 	r.electionElapsed--
 	if r.heartbeatElapsed <= 0 {
-		r.msgs = append(r.msgs, pb.Message{
+		r.send(pb.Message{
 			MsgType: pb.MessageType_MsgBeat,
+			To:      r.id,
+			From:    r.id,
 		})
 		r.heartbeatElapsed = r.heartbeatTimeout
 		return
@@ -297,11 +299,11 @@ func (r *Raft) handleElectionTimeout() {
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
-	DPrintf("role change...peerId:%d,role:Follower", r.id)
+	DPrintf("role change...peerId:%d,term:%d,role:Follower", r.id, term)
 	r.Term = term
 	r.Lead = lead
 	r.State = StateFollower
-	r.Vote = 0
+	r.Vote = lead
 	r.votes = make(map[uint64]bool)
 	r.heartbeatElapsed = r.heartbeatTimeout
 	r.electionElapsed = r.electionTimeout
@@ -347,6 +349,10 @@ func (r *Raft) stepLeader(m pb.Message) error {
 	switch m.MsgType {
 	case pb.MessageType_MsgHeartbeat:
 		r.handleHeartbeat(m)
+	case pb.MessageType_MsgBeat:
+		for peerId := range r.Prs {
+			r.sendHeartbeat(peerId)
+		}
 	case pb.MessageType_MsgHeartbeatResponse:
 		r.handleHeartbeatResp(m)
 	case pb.MessageType_MsgHup:
@@ -355,6 +361,8 @@ func (r *Raft) stepLeader(m pb.Message) error {
 		r.handleRequestVote(m)
 	case pb.MessageType_MsgRequestVoteResponse:
 		r.handleRequestVoteResp(m)
+	case pb.MessageType_MsgAppend:
+		r.handleAppendEntries(m)
 	}
 	return nil
 }
@@ -371,6 +379,8 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 		r.handleRequestVote(m)
 	case pb.MessageType_MsgRequestVoteResponse:
 		r.handleRequestVoteResp(m)
+	case pb.MessageType_MsgAppend:
+		r.handleAppendEntries(m)
 	}
 	return nil
 }
@@ -381,20 +391,47 @@ func (r *Raft) stepFollower(m pb.Message) error {
 		r.handleHeartbeat(m)
 	case pb.MessageType_MsgHeartbeatResponse:
 		r.handleHeartbeatResp(m)
-	case pb.MessageType_MsgBeat:
-		for peerId := range r.Prs {
-			r.sendHeartbeat(peerId)
-		}
 	case pb.MessageType_MsgRequestVoteResponse:
 		r.handleRequestVoteResp(m)
+	case pb.MessageType_MsgAppend:
+		r.handleAppendEntries(m)
 	}
 	return nil
 }
 
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
-	// Your Code Here (2A).
+	// Your Code Here (2A) .
+	if m.Term < r.Term {
+		r.send(pb.Message{
+			To:      m.From,
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Term:    r.Term,
+			Index:   m.Index,
+			Reject:  true,
+		})
+		return
+	}
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, m.From)
+		r.send(pb.Message{
+			To:      m.From,
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Term:    r.Term,
+			Index:   m.Index,
+			Reject:  false,
+		})
+		return
+	}
+	//TODO:日志校验
+	r.send(pb.Message{
+		To:      m.From,
+		MsgType: pb.MessageType_MsgAppendResponse,
+		Index:   m.Index,
+		Reject:  false,
+	})
 	//并发/重试导致commit idx已经更新
+	/**
 	if m.Index < r.RaftLog.committed {
 		r.send(pb.Message{To: m.From, MsgType: pb.MessageType_MsgAppendResponse, Index: r.RaftLog.committed})
 		return
@@ -411,6 +448,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			//LogTerm: hintTerm,
 		})
 	}
+	*/
 }
 
 // handleHeartbeat handle Heartbeat RPC request
