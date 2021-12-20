@@ -201,7 +201,7 @@ func newRaft(c *Config) *Raft {
 		Lead:             0,
 		heartbeatTimeout: c.HeartbeatTick,
 		electionTimeout:  c.ElectionTick,
-		heartbeatElapsed: c.HeartbeatTick,
+		heartbeatElapsed: 0,
 		electionElapsed:  0,
 		leadTransferee:   0,
 		PendingConfIndex: 0,
@@ -267,25 +267,30 @@ func (r *Raft) sendRequestVote(to uint64) {
 		Term:    r.Term,
 	}
 	DPrintf("send request vote...from:%d,to:%d,term:%d", msg.From, msg.To, msg.Term)
-	r.msgs = append(r.msgs, msg)
+	r.send(msg)
 }
 
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
-	r.heartbeatElapsed--
-	r.electionElapsed--
-	if r.heartbeatElapsed <= 0 {
-		r.send(pb.Message{
-			MsgType: pb.MessageType_MsgBeat,
-			To:      r.id,
-			From:    r.id,
-		})
-		r.heartbeatElapsed = r.heartbeatTimeout
+	r.heartbeatElapsed++
+	r.electionElapsed++
+	//选举超时
+	if r.electionElapsed >= r.randomElectionTimeout {
+		r.Step(pb.Message{MsgType: pb.MessageType_MsgHup})
+		r.electionElapsed = 0
 		return
 	}
-	if r.electionElapsed <= 0 {
-		r.handleElectionTimeout()
+	//心跳定时器
+	if r.State != StateLeader {
+		return
+	}
+	if r.heartbeatElapsed >= r.heartbeatTimeout {
+		r.Step(pb.Message{
+			MsgType: pb.MessageType_MsgBeat,
+		})
+		r.heartbeatElapsed = 0
+		r.electionElapsed = 0
 	}
 }
 
@@ -314,7 +319,7 @@ func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 	DPrintf("role change...peerId:%d,role:Candidate", r.id)
 	r.State = StateCandidate
-	r.electionElapsed = r.electionTimeout
+	r.electionElapsed = 0
 	r.Term++
 	//直接投自己一票
 	r.Vote = r.id
