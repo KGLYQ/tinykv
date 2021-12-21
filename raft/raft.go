@@ -21,7 +21,7 @@ import (
 	"math/rand"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -310,8 +310,8 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.State = StateFollower
 	r.Vote = lead
 	r.votes = make(map[uint64]bool)
-	r.heartbeatElapsed = r.heartbeatTimeout
-	r.electionElapsed = r.electionTimeout
+	r.heartbeatElapsed = 0
+	r.electionElapsed = 0
 }
 
 // becomeCandidate transform this peer's state to candidate
@@ -324,6 +324,12 @@ func (r *Raft) becomeCandidate() {
 	//直接投自己一票
 	r.Vote = r.id
 	r.votes[r.id] = true
+	r.stepCandidate(pb.Message{
+		MsgType: pb.MessageType_MsgRequestVoteResponse,
+		To:      r.id,
+		From:    r.id,
+		Term:    r.Term,
+	})
 }
 
 // becomeLeader transform this peer's state to leader
@@ -498,15 +504,25 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		Reject:  true,
 	}
 	defer func() {
-		r.msgs = append(r.msgs, resp)
+		r.send(resp)
 	}()
-	if r.Term >= m.Term {
+	if r.Term > m.Term {
 		return
 	}
-	r.becomeFollower(m.Term, m.From)
-	r.Vote = m.From
-	resp.Term = r.Term
-	resp.Reject = false
+	if r.Term < m.Term {
+		r.becomeFollower(m.Term, m.From)
+		r.Vote = m.From
+		resp.Term = r.Term
+		resp.Reject = false
+		return
+	}
+	//term相同的情况下需要判断是否已经投票
+	if r.Vote <= 0 || r.Vote == m.From {
+		r.Vote = m.From
+		resp.Term = r.Term
+		resp.Reject = false
+		return
+	}
 }
 
 func (r *Raft) handleRequestVoteResp(m pb.Message) {
@@ -523,7 +539,7 @@ func (r *Raft) handleRequestVoteResp(m pb.Message) {
 				cnt++
 			}
 		}
-		if cnt > (len(r.Prs)+1)/2 {
+		if cnt > (len(r.Prs))/2 {
 			r.becomeLeader()
 		}
 	}
