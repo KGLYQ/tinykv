@@ -295,6 +295,9 @@ func (r *Raft) tick() {
 }
 
 func (r *Raft) handleElectionTimeout() {
+	if r.State == StateLeader {
+		return
+	}
 	r.becomeCandidate()
 	for peerId := range r.Prs {
 		r.sendRequestVote(peerId)
@@ -330,6 +333,7 @@ func (r *Raft) becomeCandidate() {
 		From:    r.id,
 		Term:    r.Term,
 	})
+	r.resetRandomElectionTimeout()
 }
 
 // becomeLeader transform this peer's state to leader
@@ -366,8 +370,8 @@ func (r *Raft) stepLeader(m pb.Message) error {
 		}
 	case pb.MessageType_MsgHeartbeatResponse:
 		r.handleHeartbeatResp(m)
-	case pb.MessageType_MsgHup:
-		r.handleElectionTimeout()
+	/*case pb.MessageType_MsgHup:
+	r.handleElectionTimeout()*/
 	case pb.MessageType_MsgRequestVote:
 		r.handleRequestVote(m)
 	case pb.MessageType_MsgRequestVoteResponse:
@@ -439,6 +443,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 	//TODO:日志校验
+	if r.State != StateFollower {
+		r.becomeFollower(m.Term, m.From)
+	}
 	r.send(pb.Message{
 		To:      m.From,
 		MsgType: pb.MessageType_MsgAppendResponse,
@@ -539,7 +546,7 @@ func (r *Raft) handleRequestVoteResp(m pb.Message) {
 				cnt++
 			}
 		}
-		if cnt > (len(r.Prs))/2 {
+		if cnt > (len(r.Prs)+1)/2 {
 			r.becomeLeader()
 		}
 	}
