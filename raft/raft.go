@@ -234,7 +234,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 		Commit:   r.RaftLog.committed,
 		Snapshot: nil,
 	}
-	r.msgs = append(r.msgs, message)
+	r.send(message)
 	return true
 }
 
@@ -255,7 +255,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 		//Commit:   r.commitIndex,
 	}
 	DPrintf("send heartbeat...from:%d,to:%d,msg:%+v", msg.From, msg.To, msg)
-	r.msgs = append(r.msgs, msg)
+	r.send(msg)
 }
 
 func (r *Raft) sendRequestVote(to uint64) {

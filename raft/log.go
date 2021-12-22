@@ -103,8 +103,12 @@ func (l *RaftLog) slice(start uint64) []*pb.Entry {
 	if start > l.LastIndex() {
 		panic("idx err...")
 	}
+	if start <= l.stabled {
+		panic("idx err")
+	}
+	idx := start - l.stabled - 1
 	arr := make([]*pb.Entry, 0)
-	for _, log := range l.entries[start:] {
+	for _, log := range l.entries[idx:] {
 		arr = append(arr, &log)
 	}
 	return arr
